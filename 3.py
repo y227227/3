@@ -1,65 +1,56 @@
+
 import streamlit as st
 import pandas as pd
 import requests
+# IMMEDIATE health check response (runs in <100ms)
+st.set_page_config(page_title="נדלן חכם", layout="wide")
+# Health check - responds instantly
+if len(st.secrets.get("dummy", "")) > 0 or st.query_params.get("health"):
+st.success("🟢 אפליקציה פעילה")
+st.stop()
+st.sidebar.header("🔍 מסננים")
+city = st.sidebar.text_input("שם עיר:", "תל אביב")
+min_price = st.sidebar.number_input("מחיר מינימלי (₪):", min_value=0, value=1000000)
+max_price = st.sidebar.number_input("מחיר מקסימלי (₪):", min_value=0, value=10000000)
+min_year = st.sidebar.slider("שנת בנייה מינימלית:", 1950, 2025, 2000)
+@st.cache_data(ttl=3600)
+def get_data(city_name, p_min, p_max, year_min):
+url = "https://data.gov.il/api/3/action/datastore_search_sql"
+resource_id = "ad53386d-194d-4760-afde-48409b0c0a37"
 
-# הגדרות עמוד
-st.set_page_config(page_title="ניתוח נדלן חכם", layout="wide")
-st.title("📊 מנוע חיפוש עסקאות נדלן - הדגמת SaaS")
+sql = f"""
+SELECT "GUSH","PARCEL","DEALAMOUNT","DEALDATE","FULLADRESS","CITY","YEARBUILT","ROOMS"
+FROM "{resource_id}"
+WHERE "CITY" LIKE '%{city_name}%'
+AND CAST("DEALAMOUNT" AS NUMERIC) >= {p_min}
+AND CAST("DEALAMOUNT" AS NUMERIC) <= {p_max}
+AND CAST("YEARBUILT" AS NUMERIC) >= {year_min}
+ORDER BY "DEALDATE" DESC LIMIT 200
+"""
 
-st.markdown("""
-ברוכים הבאים למערכת ה-SaaS שלך. הקוד הזה מושך נתונים ישירות ממאגר הממשלה (Data.gov.il)
-""")
+try:
+resp = requests.get(url, params={'sql': sql}, timeout=10)
+if resp.status_code == 200:
+data = resp.json()
+if data.get('success'):
+return pd.DataFrame(data['result']['records'])
+return pd.DataFrame()
+except:
+return pd.DataFrame()
+st.title("📊 נדלן חכם - חיפוש מתקדם")
+if st.sidebar.button("🔍 חפש עסקאות", use_container_width=True):
+with st.spinner("טוען נתונים..."):
+df = get_data(city, min_price, max_price, min_year)
 
-# פונקציה למשיכת נתונים
-def get_data(city_name):
-    url = "https://data.gov.il/api/3/action/datastore_search"
-    # ID של מאגר עסקאות הנדל"ן
-    resource_id = "ad53386d-194d-4760-afde-48409b0c0a37"
-    
-    params = {
-        'resource_id': resource_id,
-        'q': city_name,
-        'limit': 10
-    }
-    
-    try:
-        response = requests.get(url, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            records = data['result']['records']
-            return pd.DataFrame(records)
-        else:
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"שגיאת התחברות: {e}")
-        return pd.DataFrame()
+if not df.empty:
+df['DEALAMOUNT'] = pd.to_numeric(df['DEALAMOUNT'], errors='coerce')
 
-# ממשק משתמש
-city = st.text_input("הזן שם עיר (למשל: תל אביב, חיפה):", "תל אביב - יפו")
+col1, col2, col3 = st.columns(3)
+col1.metric("עסקאות", len(df))
+col2.metric("ממוצע", f"₪{df['DEALAMOUNT'].mean():,.0f}")
+col3.metric("חציון", f"₪{df['DEALAMOUNT'].median():,.0f}")
 
-if st.button("בצע ניתוח"):
-    with st.spinner('מושך נתונים מהשרת...'):
-        df = get_data(city)
-        
-        if not df.empty:
-            st.success(f"נמצאו {len(df)} עסקאות אחרונות ב{city}")
-            
-            # ניקוי והמרת נתונים (הפיכת מחיר למספר)
-            if 'DEALAMOUNT' in df.columns:
-                df['DEALAMOUNT'] = pd.to_numeric(df['DEALAMOUNT'], errors='coerce')
-            
-            # הצגת הטבלה - בחרנו עמודות שקיימות ב-API
-            cols_to_show = ['GUSH', 'PARCEL', 'DEALAMOUNT', 'DEALDATE', 'FULLADRESS', 'YEARBUILT']
-            # מציג רק עמודות שבאמת קיימות בתוצאה
-            existing_cols = [c for c in cols_to_show if c in df.columns]
-            st.dataframe(df[existing_cols])
-            
-            # חישוב סטטיסטיקה
-            if 'DEALAMOUNT' in df.columns:
-                avg_price = df['DEALAMOUNT'].mean()
-                st.metric("מחיר ממוצע באזור", f"₪{avg_price:,.0f}")
-        else:
-            st.error("לא נמצאו נתונים. נסה שם עיר מדויק יותר (למשל 'ירושלים' או 'תל אביב - יפו').")
-
-st.divider()
-st.info("הקוד שרץ כאן מוגן בשרת. הלקוח רואה רק את התוצאות האלו.")
+st.dataframe(df[['FULLADRESS', 'DEALAMOUNT', 'DEALDATE', 'ROOMS', 'YEARBUILT']], use_container_width=True)
+else:
+st.warning("לא נמצאו תוצאות. הרחב טווחים.")
+st.info("💡 לחץ 'חפש עסקאות' להפעלת החיפוש")
